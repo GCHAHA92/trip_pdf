@@ -1,9 +1,13 @@
 # core/pdf_analyzer.py
 """
-디버그용 pdf_analyzer:
-- PDF 내용은 무시하고
-- 템플릿 엑셀의 C5, H5에 TEST 값을 써 넣어
-  실제로 엑셀에 쓰기가 되는지 확인하는 용도
+완전 최소 디버그 버전.
+
+- PDF 내용도, 템플릿도 전부 무시하고
+- 새 엑셀 파일을 하나 만들어서
+  A1에 "HELLO", B2에 "WORLD"를 써서 반환한다.
+
+이래도 다운로드한 엑셀에 HELLO / WORLD가 안 보이면,
+app.py가 이 함수를 아예 안 쓰고 있다는 뜻이다.
 """
 
 from __future__ import annotations
@@ -11,31 +15,26 @@ from typing import Tuple
 import io
 
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import Workbook
 
 
 def analyze_pdf_and_template(
     pdf_bytes: bytes,
     template_bytes: bytes,
 ) -> Tuple[pd.DataFrame, bytes]:
-    """
-    PDF 내용은 무시하고,
-    템플릿 엑셀의 C5 셀에 '테스트', H5 셀에 12345를 써 넣은 뒤
-    수정된 엑셀 파일을 bytes로 반환한다.
-    """
+    # 1) 요약 DataFrame: 그냥 테스트용 한 줄
+    summary = pd.DataFrame({"메시지": ["디버그용 요약 (새 워크북 테스트)"]})
 
-    # 1) 요약 DataFrame은 그냥 빈 DataFrame 리턴 (UI 깨지지 않게 컬럼 하나 넣어줌)
-    summary = pd.DataFrame({"메시지": ["디버그용 요약 (PDF 내용은 무시함)"]})
-
-    # 2) 템플릿 엑셀 로드
-    wb = load_workbook(io.BytesIO(template_bytes))
+    # 2) 완전히 새 워크북 생성 (템플릿은 아예 안 씀)
+    wb = Workbook()
     ws = wb.active
+    ws.title = "TEST_SHEET"
 
-    # 3) 테스트로 C5, H5에 값 써 넣기
-    ws["C5"] = "테스트"
-    ws["H5"] = 12345
+    ws["A1"] = "HELLO"
+    ws["B2"] = "WORLD"
+    ws["C3"] = "이 파일이 보이면 pdf_analyzer는 정상 작동 중"
 
-    # 4) 메모리 상에 저장해서 bytes로 반환
+    # 3) 메모리에 저장해서 bytes 반환
     out = io.BytesIO()
     wb.save(out)
     out.seek(0)
