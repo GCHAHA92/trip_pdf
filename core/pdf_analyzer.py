@@ -173,19 +173,13 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
         cell_h = ws.cell(row=current_row, column=COL_PDF_AMT)
         cell_h.value = "" if amount_pdf == 0 else amount_pdf
 
-
-        
-       codex/fix-layout-alignment-issue-j8zv8a
         # 계산 금액(L열) - '차이' 기준으로 표시 (계산액이 0이어도 차이가 있으면 표기)
         diff = int(row.get("차이", amount_calc - amount_pdf) or 0)
         cell_l = ws.cell(row=current_row, column=COL_CALC_AMT)
         if diff != 0:
-=======
-        # 계산 금액(L열) - PDF와 다를 때 표시 (계산액이 0이어도 차이가 있으면 표기)
-        cell_l = ws.cell(row=current_row, column=COL_CALC_AMT)
-        if amount_pdf != amount_calc:
-        main
-            cell_l.value = amount_calc
+            # 계산액이 0이어도, 차이가 있다면 셀은 비워둘지/0을 쓸지 선택 가능
+            # 여기서는 0이면 공란, 그 외에는 실제 금액 표시
+            cell_l.value = "" if amount_calc == 0 else amount_calc
             cell_h.font = red_bold_font
             cell_l.font = red_bold_font
         else:
@@ -199,47 +193,4 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
     # 템플릿에서 A26:G26은 합쳐진 셀("합계" 글자 있음)이라
     # G열에는 글자를 쓰지 않고, H열에만 수식 넣는다.
     if last_data_row >= DATA_START_ROW:
-        first_cell = ws.cell(row=DATA_START_ROW, column=COL_PDF_AMT).coordinate
-        last_cell = ws.cell(row=last_data_row, column=COL_PDF_AMT).coordinate
-        ws.cell(row=total_row, column=COL_PDF_AMT).value = f"=SUM({first_cell}:{last_cell})"
-
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-    return out.getvalue()
-
-
-# ─────────────────────────────────────
-# 3. 앱에서 부르는 메인 함수
-# ─────────────────────────────────────
-
-def analyze_pdf_and_template(
-    pdf_bytes: bytes,
-    template_bytes: bytes,
-) -> Tuple[pd.DataFrame, bytes]:
-    """
-    PDF + 템플릿을 받아서:
-      - 성명별 요약 DataFrame(summary)
-      - 템플릿에 결과 채운 엑셀 bytes
-    를 반환.
-    """
-    # 1) PDF 파싱 (행 단위 데이터)
-    df_rows = parse_pdf_to_rows(pdf_bytes)
-
-    # 2) PDF 기준 집계
-    pdf_summary = summarize_pdf_by_person(df_rows)
-
-    # 3) 규칙에 따른 실제 지급액 계산 (rules.py)
-    calc_totals = compute_allowance_by_person(df_rows)
-    # calc_totals: index=성명, value=계산된 총지급액
-
-    # 4) summary 결합
-    summary = pdf_summary.copy()
-    # calc_totals를 summary index에 맞춰 align
-    summary["계산_총지급액"] = calc_totals.reindex(summary.index).fillna(0).astype(int)
-    summary["차이"] = summary["계산_총지급액"] - summary["총지급액_숫자"]
-
-    # 5) 템플릿 채우기
-    result_bytes = fill_template_with_summary(template_bytes, summary)
-
-    return summary, result_bytes
+        first_cell = ws.cell(row=DATA_START_ROW, column=COL_PD
