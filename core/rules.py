@@ -16,9 +16,36 @@ from __future__ import annotations
 import pandas as pd
 
 
+def _normalize_minutes(minutes: int) -> int:
+    """minutes 값이 None/빈 문자열/음수여도 0 이상 int로 정규화."""
+    try:
+        m = int(float(minutes))
+    except Exception:
+        m = 0
+    return max(m, 0)
+
+
+def _normalize_car_used(car_used) -> bool:
+    """공용차량 사용 여부를 문자열/숫자/불리언 입력에 관계없이 bool로 변환."""
+    true_values = {"사용", "y", "yes", "true", "1", 1, True}
+    false_values = {"미사용", "n", "no", "false", "0", 0, False}
+
+    if car_used in true_values:
+        return True
+    if car_used in false_values:
+        return False
+    if isinstance(car_used, str):
+        normalized = car_used.strip().lower()
+        if normalized in true_values:
+            return True
+        if normalized in false_values:
+            return False
+    return bool(car_used)
+
+
 def calc_row_amount(minutes: int, car_used: bool) -> int:
     """출장 1건(1행)에 대한 기본 금액 계산."""
-    m = int(minutes or 0)
+    m = _normalize_minutes(minutes)
     amt = 0
     if 60 <= m < 240:
         amt = 10000
@@ -48,7 +75,9 @@ def compute_allowance_by_person(df_rows: pd.DataFrame) -> pd.Series:
 
     # 1) 건별 기본 금액
     df["row_base"] = df.apply(
-        lambda r: calc_row_amount(r["minutes"], bool(r["car_used"])),
+        lambda r: calc_row_amount(
+            _normalize_minutes(r["minutes"]), _normalize_car_used(r["car_used"])
+        ),
         axis=1,
     )
 
