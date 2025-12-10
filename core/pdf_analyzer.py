@@ -10,6 +10,8 @@ PDF 파서 + 계산 규칙을 이용해
   이 경우 합계는 원래 H26 셀에 있어야 한다.
 - 21명을 초과하면 H26 위에 줄을 추가로 삽입해서,
   마지막 사람 바로 아래 H열에 합계를 둔다.
+- 인원수 제한은 없으며, 22명 이상일 때 필요한 만큼 줄을 삽입해 30명, 40명 등
+  대규모 명단도 합계 행이 자동으로 아래로 이동한다.
 """
 
 from __future__ import annotations
@@ -135,7 +137,7 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
     MAX_ROWS_WITHOUT_INSERT = 21
     BASE_SUM_ROW = DATA_START_ROW + MAX_ROWS_WITHOUT_INSERT  # 5 + 21 = 26
 
-    # 인원이 21명 초과면, BASE_SUM_ROW(26행) 위에 줄 삽입
+    # 인원 제한 없이 21명을 넘으면 필요한 만큼 합계 행 위에 줄 삽입
     if n_people > MAX_ROWS_WITHOUT_INSERT:
         extra_rows = n_people - MAX_ROWS_WITHOUT_INSERT
         ws.insert_rows(BASE_SUM_ROW, amount=extra_rows)
@@ -171,9 +173,9 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
         cell_h = ws.cell(row=current_row, column=COL_PDF_AMT)
         cell_h.value = "" if amount_pdf == 0 else amount_pdf
 
-        # 계산 금액(L열) - PDF와 다를 때만 표시
+        # 계산 금액(L열) - PDF와 다를 때 표시 (계산액이 0이어도 차이가 있으면 표기)
         cell_l = ws.cell(row=current_row, column=COL_CALC_AMT)
-        if amount_pdf != amount_calc and amount_calc != 0:
+        if amount_pdf != amount_calc:
             cell_l.value = amount_calc
             cell_h.font = red_bold_font
         else:

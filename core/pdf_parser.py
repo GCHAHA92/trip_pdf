@@ -71,38 +71,57 @@ def _parse_period(text: str) -> Tuple[str, str, str, str]:
     """
     '2025-11-14 09:00 ~ 2025-11-14 18:00'
     '2025-11-14 09:00\n~ 2025-11-14 18:00'
-    에서 (시작일자, 시작시각, 종료일자, 종료시각)을 반환.
-    실패하면 ("", "", "", "").
+    과 같이 시작/종료 일시가 포함된 문자열에서
+    (시작일자, 시작시각, 종료일자, 종료시각)을 반환한다.
+    인식하지 못하면 ("", "", "", "")을 반환.
     """
     if text is None:
         return "", "", "", ""
-    s = str(text).strip()
 
-    # 줄바꿈, 탭 등을 공백으로 통일
+    s = str(text).strip()
+    if not s:
+        return "", "", "", ""
+
+    # 줄바꿈, 탭 등을 공백으로 통일하고 '~' 주변에 공백 부여
     s = s.replace("\r", " ").replace("\n", " ")
     s = s.replace("~", " ~ ")
     s = re.sub(r"\s+", " ", s)
 
-    m = re.search(
-        r"(\d{4}-\{0,1}\d{2}-\d{2})\s+(\d{2}:\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})",
-        s,
-    )
-    if not m:
-        # 일반적인 경우만 처리 (연도 동일 가정)
-        m2 = re.search(
-            r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}).*?(\d{2}:\d{2})",
-            s,
-        )
-        if not m2:
-            return "", "", "", ""
-        start_date = m2.group(1)
-        start_time = m2.group(2)
-        end_date = start_date
-        end_time = m2.group(3)
-        return start_date, start_time, end_date, end_time
+    # (시작일자 시작시각) ~ (종료일자 종료시각)
+    patterns = [
+        r"(?P<start_date>\d{4}-\d{1,2}-\d{1,2})\s+"
+        r"(?P<start_time>\d{1,2}:\d{2})\s*~\s*"
+        r"(?P<end_date>\d{4}-\d{1,2}-\d{1,2})\s+"
+        r"(?P<end_time>\d{1,2}:\d{2})",
+        # 종료일자가 따로 없고, 같은 날짜로만 표기된 경우
+        r"(?P<date>\d{4}-\d{1,2}-\d{1,2})\s+"
+        r"(?P<start_time>\d{1,2}:\d{2}).*?(?P<end_time>\d{1,2}:\d{2})",
+    ]
 
-    start_date, start_time, end_date, end_time = m.groups()
-    return start_date, start_time, end_date, end_time
+    for pattern in patterns:
+        m = re.search(pattern, s)
+        if not m:
+            continue
+
+        group_dict = m.groupdict()
+        if "start_date" in group_dict:
+            return (
+                group_dict.get("start_date", ""),
+                group_dict.get("start_time", ""),
+                group_dict.get("end_date", ""),
+                group_dict.get("end_time", ""),
+            )
+
+        # 동일한 날짜로만 표기된 경우
+        date_only = group_dict.get("date", "")
+        return (
+            date_only,
+            group_dict.get("start_time", ""),
+            date_only,
+            group_dict.get("end_time", ""),
+        )
+
+    return "", "", "", ""
 
 
 def _extract_name(raw: str) -> str:
