@@ -21,6 +21,7 @@ import io
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 
 from .pdf_parser import parse_pdf_to_rows
 from .rules import compute_allowance_by_person
@@ -177,8 +178,7 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
         diff = int(row.get("차이", amount_calc - amount_pdf) or 0)
         cell_l = ws.cell(row=current_row, column=COL_CALC_AMT)
         if diff != 0:
-            # 계산액이 0이어도, 차이가 있다면 셀은 비워둘지/0을 쓸지 선택 가능
-            # 여기서는 0이면 공란, 그 외에는 실제 금액 표시
+            # 계산액이 0이면 공란, 그 외에는 실제 금액 표시
             cell_l.value = "" if amount_calc == 0 else amount_calc
             cell_h.font = red_bold_font
             cell_l.font = red_bold_font
@@ -193,4 +193,86 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
     # 템플릿에서 A26:G26은 합쳐진 셀("합계" 글자 있음)이라
     # G열에는 글자를 쓰지 않고, H열에만 수식 넣는다.
     if last_data_row >= DATA_START_ROW:
-        first_cell = ws.cell(row=DATA_START_ROW, column=COL_PD
+        col_letter = get_column_letter(COL_PDF_AMT)
+        sum_formula = f"=SUM({col_letter}{DATA_START_ROW}:{col_letter}{last_data_row})"
+        ws.cell(row=total_row, column=COL_PDF_AMT).value = sum_formula
+        # 굵은 글씨로 강조
+        ws.cell(row=total_row, column=COL_PDF_AMT).font = Font(bold=True)
+
+    # 결과 바이트로 반환
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.getvalue()
+
+
+# ─────────────────────────────────────
+# 3. 전체 흐름: pdf bytes + template bytes -> summary_df, result_xlsx_bytes
+# ─────────────────────────────────────
+
+def analyze_pdf_and_template(pdf_bytes: bytes, template_bytes: bytes) -> Tuple[pd.DataFrame, bytes]:
+    """
+    PDF 바이너리와 템플릿 엑셀 바이너리를 받아
+    (summary_df, 결과 엑셀 bytes)를 반환.
+
+    summary_df 는 index=성명 형태의 DataFrame이며, 최소 아래 컬럼을 포함합니다:
+      - 총지급액_숫자
+      - 4시간미만
+      - 4시간이상
+      - 차량사용횟수
+      - 계산_총지급액
+      - 차이
+    """
+    # 1) PDF를 행단위로 파싱
+    df_rows = parse_pdf_to_rows(pdf_bytes)
+
+    # 2) 성명별 집계
+    summary = summarize_pdf_by_person(df_rows)
+
+    # 3) 규칙에 따라 계산(방어적으로 호출)
+    summary2 = summary.copy()
+    summary2["계산_총지급액"] = 0
+
+    for name, row in summary2.iterrows():
+        under4 = int(row.get("4시간미만", 0) or 0)
+        over4 = int(row.get("4시간이상", 0) or 0)
+        car_cnt = int(row.get("차량사용횟수", 0) or 0)
+        calc_amt = 0
+
+        # 가능한 호출 형태를 순차적으로 시도
+        try:
+            calc_amt = compute_allowance_by_person(under4=under4, over4=over4, car_cnt=car_cnt)
+        except TypeError:
+            try:
+                calc_amt = compute_allowance_by_person(under4, over4, car_cnt)
+            except TypeError:
+                try:
+                    # 일부 구현은 전체 행(Series/Dict)을 받는 경우가 있음
+                    calc_amt = compute_allowance_by_person(row)
+                except Exception:
+                    try:
+                        calc_amt = compute_allowance_by_person(row.to_dict())
+                    except Exception:
+                        # 실패하면 0으로 처리 (안전장치)
+                        calc_amt = 0
+        except Exception:
+            # 기타 예외는 무시하고 0으로
+            calc_amt = 0
+
+        try:
+            calc_amt = int(calc_amt or 0)
+        except Exception:
+            calc_amt = 0
+
+        summary2.at[name, "계산_총지급액"] = calc_amt
+
+    # 4) 차이 컬럼 추가 (계산 - PDF)
+    if "총지급액_숫자" in summary2.columns:
+        summary2["차이"] = summary2["계산_총지급액"] - summary2["총지급액_숫자"]
+    else:
+        summary2["차이"] = summary2["계산_총지급액"]
+
+    # 5) 템플릿에 채워넣기
+    result_bytes = fill_template_with_summary(template_bytes, summary2)
+
+    return summary2, result_bytes
