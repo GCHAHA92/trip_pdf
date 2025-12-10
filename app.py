@@ -3,9 +3,6 @@ import pandas as pd
 
 from core.pdf_analyzer import analyze_pdf_and_template
 
-# 🔧 템플릿 파일 경로
-# 깃허브에서 templates 폴더 안에 넣었다면 이대로 두고,
-# 폴더 이름을 "템플릿" 등으로 썼다면 아래 경로만 바꿔주면 됨.
 TEMPLATE_PATH = "templates/지급조서_템플릿.xlsx"
 
 st.set_page_config(
@@ -59,18 +56,27 @@ if run_button:
                 else:
                     st.success("정산 완료!")
 
-                    # 1) 성명별 요약표 표시
-                    st.subheader("성명별 요약 (PDF vs 계산금액)")
-                    summary_display = summary_df.sort_values("차이", ascending=False)
-                    st.dataframe(summary_display)
+                    st.subheader("요약 결과")
 
-                    # 2) 차이 나는 사람만 따로
-                    diff_df = summary_display[summary_display["차이"] != 0]
-                    if not diff_df.empty:
-                        st.subheader("PDF 금액과 계산 금액이 다른 대상자 목록")
-                        st.dataframe(diff_df)
+                    # 👉 여기서 '차이' 컬럼이 있을 때만 정렬/차이표 보여주기
+                    if isinstance(summary_df, pd.DataFrame):
+                        if "차이" in summary_df.columns:
+                            # 차이 기준으로 정렬
+                            summary_display = summary_df.sort_values("차이", ascending=False)
+                            st.dataframe(summary_display, use_container_width=True)
+
+                            # 차이 나는 사람만 따로
+                            diff_df = summary_display[summary_display["차이"] != 0]
+                            if not diff_df.empty:
+                                st.subheader("PDF 금액과 계산 금액이 다른 대상자 목록")
+                                st.dataframe(diff_df, use_container_width=True)
+                            else:
+                                st.info("PDF 금액과 규칙 계산 금액이 모두 일치합니다. 🎉")
+                        else:
+                            # 디버그용처럼 '차이'가 없는 경우 그냥 전체 출력
+                            st.dataframe(summary_df, use_container_width=True)
                     else:
-                        st.info("PDF 금액과 규칙 계산 금액이 모두 일치합니다. 🎉")
+                        st.write(summary_df)
 
                     st.markdown("---")
 
