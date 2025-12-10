@@ -169,15 +169,12 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
 
         current_row += 1
 
-    last_data_row = current_row - 1  # 마지막으로 채워진 사람의 행
+    last_data_row = current_row - 1  # 마지막 사람 행
 
     # ────────── 합계 수식(H열) 설정 ──────────
     # 합계는 total_row 행의 H열:
     #   =SUM(H5:H{last_data_row})
     if last_data_row >= DATA_START_ROW:
-        # G열에 "합계" 텍스트
-        ws.cell(row=total_row, column=COL_PDF_AMT - 1).value = "합계"
-
         first_cell = ws.cell(row=DATA_START_ROW, column=COL_PDF_AMT).coordinate
         last_cell = ws.cell(row=last_data_row, column=COL_PDF_AMT).coordinate
         ws.cell(row=total_row, column=COL_PDF_AMT).value = f"=SUM({first_cell}:{last_cell})"
@@ -186,7 +183,6 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
     wb.save(out)
     out.seek(0)
     return out.getvalue()
-
 
 def analyze_pdf_and_template(
     pdf_bytes: bytes,
