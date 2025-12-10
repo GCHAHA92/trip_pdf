@@ -1,4 +1,4 @@
-limport streamlit as st
+import streamlit as st
 import pandas as pd
 
 from core.pdf_analyzer import analyze_pdf_and_template
