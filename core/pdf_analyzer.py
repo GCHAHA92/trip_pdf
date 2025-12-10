@@ -1,7 +1,22 @@
 # core/pdf_analyzer.py
 """
 PDF 파서 + 계산 규칙을 이용해
-성명별 집계를 만들고, 지급조서 템플릿 엑셀에 결과를 채워넣는 모듈.
+성명별 집계를 만들고, 지급조서 템플릿(현재 구조 고정)에 결과를 채워넣는 모듈.
+
+템플릿 전제 (현재 사용 중인 양식 기준):
+- C4: '성명' 헤더
+- C5부터 실제 데이터 입력 (사람 이름)
+- A열: 연번, C열: 성명, D열: 4시간 미만, E열: 4시간 이상
+- F열: 관용차량/차량사용횟수, H열: PDF 기준 지급액(원)
+- L열: 규칙에 따른 계산결과(올바른 지급액)를 표시하는 용도
+
+추가 규칙:
+- 계산 결과 사람 수가 21명 이하라면:
+    - C5 ~ C(5 + n - 1)에 사람들 이름 채우고
+    - 합계는 항상 H26 셀에 둔다.
+- 계산 결과 사람 수가 21명을 초과하면:
+    - 원래 합계가 있던 26행 위에 필요한 행 수만큼 삽입해서
+    - "마지막 사람 바로 아래 행"의 H열에 합계를 둔다.
 """
 
 from __future__ import annotations
@@ -16,9 +31,16 @@ from .pdf_parser import parse_pdf_to_rows
 from .rules import compute_allowance_by_person
 
 
-# 템플릿에서 데이터가 시작하는 기본 행 (헤더 바로 아래)
-# 예: 4행에 "연번 / 직급 / 성명 / …" 헤더가 있고, 5행부터 데이터면 START_ROW=5
-START_ROW_DEFAULT = 5
+# ===== 템플릿 고정 위치 =====
+HEADER_ROW = 4       # C4 = 성명 헤더
+DATA_START_ROW = 5   # C5부터 데이터
+COL_NO = 1           # A열 연번
+COL_NAME = 3         # C열 성명
+COL_UNDER4 = 4       # D열 4시간 미만
+COL_OVER4 = 5        # E열 4시간 이상
+COL_CAR = 6          # F열 차량사용횟수
+COL_PDF_AMT = 8      # H열 PDF 기준 지급액(원)
+COL_CALC_AMT = 12    # L열: 계산결과(규칙상 올바른 금액) 표시용
 
 
 def summarize_pdf_by_person(df_rows: pd.DataFrame) -> pd.DataFrame:
@@ -36,6 +58,7 @@ def summarize_pdf_by_person(df_rows: pd.DataFrame) -> pd.DataFrame:
     """
     df = df_rows.copy()
 
+    # 분 단위 출장 시간 기준으로 4시간 미만/이상 플래그
     df["is_under4"] = (df["minutes"] > 0) & (df["minutes"] < 240)
     df["is_over4"] = df["minutes"] >= 240
     df["car_cnt"] = df["car_used"].astype(int)
@@ -54,133 +77,111 @@ def summarize_pdf_by_person(df_rows: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
-def _find_header_and_name_col(ws) -> tuple[int, int]:
-    """
-    워크시트에서 '성명'이 들어있는 헤더 셀 위치(행, 열)를 찾는다.
-    - 대략 1~20행 안에서만 검색
-    반환: (header_row, name_col_idx)
-    """
-    for row in range(1, 21):
-        for col in range(1, 40):
-            v = ws.cell(row=row, column=col).value
-            if v is None:
-                continue
-            if str(v).strip() == "성명":
-                return row, col
-    # 못 찾으면 기본값(4행 C열) 가정
-    return 4, 3
-
-
 def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> bytes:
     """
     지급조서 템플릿(엑셀 바이너리)에 summary 정보를 채워넣고,
     결과 엑셀을 bytes로 반환.
 
-    기본 가정(필요시 여기서만 수정하면 됨):
-      - '성명' 열 위치는 헤더를 검색해서 자동으로 찾음.
-      - D열: 4시간 미만 횟수
-      - E열: 4시간 이상 횟수
-      - F열: 차량 사용 횟수
-      - H열: PDF 기준 지급액
-      - L열: 규칙에 따른 계산금액 (PDF 금액과 다를 때만 표기)
-      - H열과 L열 값이 다르면 H열은 빨간색/굵게 표시
+    템플릿 전제:
+      - C4: '성명' 헤더
+      - C5부터 데이터 입력
+      - 기본 21명(= C5~C25)까지 들어가는 양식이고,
+        이 경우 합계는 항상 H26 셀에 둔다.
+      - 21명을 초과하면 H26 위에 줄을 추가로 삽입해서,
+        마지막 사람 바로 아래 H열에 합계를 둔다.
     """
+    # summary: index = 성명
     summary = summary.copy()
     summary = summary.fillna(0)
+
     # 타입 보정
-    for col in ["총지급액_숫자", "4시간미만", "4시간이상", "차이", "차량사용횟수", "계산_총지급액"]:
+    for col in ["총지급액_숫자", "4시간미만", "4시간이상", "차량사용횟수", "계산_총지급액", "차이"]:
         if col in summary.columns:
             summary[col] = summary[col].astype(int)
-
-    # 이름 매칭을 좀 더 튼튼하게 하기 위해 공백 제거 버전도 만든다.
-    # key: 공백 제거한 이름, value: 원래 index 이름
-    name_map = {}
-    for idx_name in summary.index:
-        key = str(idx_name).replace(" ", "").strip()
-        if key:  # 비어있지 않은 경우만
-            name_map[key] = idx_name
 
     wb = load_workbook(io.BytesIO(template_bytes))
     ws = wb.active
 
-    # 1) 헤더 위치 & 성명 열 위치 찾기
-    header_row, name_col = _find_header_and_name_col(ws)
-    data_start_row = header_row + 1
-
-    # 2) L열 헤더 없으면 추가
-    if not ws[f"L{header_row}"].value:
-        ws[f"L{header_row}"] = "계산금액(규칙)"
-
-    # 빨간 글씨용 폰트
     red_bold_font = Font(color="FF0000", bold=True)
 
-    row = data_start_row
-    last_filled_row = header_row  # 나중에 합계용으로 사용
+    # 성명 목록 정렬(보기 좋게)
+    people = list(summary.sort_index().iterrows())
+    n_people = len(people)
 
-    while True:
-        cell_name = ws.cell(row=row, column=name_col)
-        name_val = cell_name.value
+    # 사람 없으면 템플릿만 그대로 반환
+    if n_people == 0:
+        out_empty = io.BytesIO()
+        wb.save(out_empty)
+        out_empty.seek(0)
+        return out_empty.getvalue()
 
-        # 이름 셀이 비어 있거나 '합계' 등이면 데이터 끝으로 본다
-        if not name_val or str(name_val).strip() in ["합계"]:
-            break
+    # ────────── 합계 위치 설계 ──────────
+    # DATA_START_ROW = 5 (C5부터 이름)
+    # 기본 설계: 최대 21명 -> 데이터는 5~25, 합계는 26행(H26)
+    MAX_ROWS_WITHOUT_INSERT = 21
+    BASE_SUM_ROW = DATA_START_ROW + MAX_ROWS_WITHOUT_INSERT  # 5 + 21 = 26
 
-        # 템플릿에 적힌 이름 정리
-        name_str_raw = str(name_val)
-        name_str = name_str_raw.strip()
-        name_key = name_str.replace(" ", "")
+    # 인원이 21명 초과면, BASE_SUM_ROW(26행) 위에 줄 삽입
+    if n_people > MAX_ROWS_WITHOUT_INSERT:
+        extra_rows = n_people - MAX_ROWS_WITHOUT_INSERT
+        ws.insert_rows(BASE_SUM_ROW, amount=extra_rows)
+        # 이제 합계 행은 26 + extra_rows로 내려감
+        total_row = BASE_SUM_ROW + extra_rows
+    else:
+        # 21명 이하이면 합계는 항상 고정 H26에 둔다.
+        total_row = BASE_SUM_ROW
 
-        # 기본값
-        under4 = over4 = car_cnt = 0
-        amount_pdf = amount_calc = 0
+    # ────────── 데이터 채우기 ──────────
+    current_row = DATA_START_ROW
+    for idx, (name, row) in enumerate(people, start=1):
+        name_str = str(name).strip()
+        if not name_str:
+            continue
 
-        # summary에서 이름 매칭
-        idx_name = None
-        if name_str in summary.index:
-            idx_name = name_str
-        elif name_key in name_map:
-            idx_name = name_map[name_key]
+        under4 = int(row.get("4시간미만", 0) or 0)
+        over4 = int(row.get("4시간이상", 0) or 0)
+        car_cnt = int(row.get("차량사용횟수", 0) or 0)
+        amount_pdf = int(row.get("총지급액_숫자", 0) or 0)
+        amount_calc = int(row.get("계산_총지급액", 0) or 0)
 
-        if idx_name is not None:
-            r = summary.loc[idx_name]
-            under4 = int(r.get("4시간미만", 0) or 0)
-            over4 = int(r.get("4시간이상", 0) or 0)
-            car_cnt = int(r.get("차량사용횟수", 0) or 0)
-            amount_pdf = int(r.get("총지급액_숫자", 0) or 0)
-            amount_calc = int(r.get("계산_총지급액", 0) or 0)
+        # 연번(A열)
+        ws.cell(row=current_row, column=COL_NO).value = idx
 
-        # D/E/F: 4시간 미만/이상/차량횟수
-        ws[f"D{row}"] = "" if under4 == 0 else under4
-        ws[f"E{row}"] = "" if over4 == 0 else over4
-        ws[f"F{row}"] = "" if car_cnt == 0 else car_cnt
+        # 성명(C열)
+        ws.cell(row=current_row, column=COL_NAME).value = name_str
 
-        # H열: PDF 기준 지급액
-        cell_h = ws[f"H{row}"]
+        # 4시간 미만/이상/차량
+        ws.cell(row=current_row, column=COL_UNDER4).value = "" if under4 == 0 else under4
+        ws.cell(row=current_row, column=COL_OVER4).value = "" if over4 == 0 else over4
+        ws.cell(row=current_row, column=COL_CAR).value = "" if car_cnt == 0 else car_cnt
+
+        # PDF 금액(H열)
+        cell_h = ws.cell(row=current_row, column=COL_PDF_AMT)
         cell_h.value = "" if amount_pdf == 0 else amount_pdf
 
-        # L열: 계산금액 (PDF 금액과 다를 때만 표시)
-        cell_l = ws[f"L{row}"]
-        if amount_pdf != amount_calc:
-            # 계산 금액이 0인데 PDF 금액도 0이면 굳이 표시할 필요 없음
-            if amount_calc != 0:
-                cell_l.value = amount_calc
-                cell_h.font = red_bold_font
-            else:
-                cell_l.value = ""
+        # 계산 금액(L열) - PDF와 다를 때만
+        cell_l = ws.cell(row=current_row, column=COL_CALC_AMT)
+        if amount_pdf != amount_calc and amount_calc != 0:
+            cell_l.value = amount_calc
+            cell_h.font = red_bold_font
         else:
             cell_l.value = ""
 
-        last_filled_row = row
-        row += 1
+        current_row += 1
 
-    # 3) 합계 행(H열) 자동 계산 (필요시 사용)
-    if last_filled_row >= data_start_row:
-        total_row = last_filled_row + 1
-        if not ws[f"G{total_row}"].value:
-            ws[f"G{total_row}"] = "합계"
-        ws[f"H{total_row}"] = f"=SUM(H{data_start_row}:H{last_filled_row})"
+    last_data_row = current_row - 1  # 마지막으로 채워진 사람의 행
 
-    # bytes로 저장
+    # ────────── 합계 수식(H열) 설정 ──────────
+    # 합계는 total_row 행의 H열:
+    #   =SUM(H5:H{last_data_row})
+    if last_data_row >= DATA_START_ROW:
+        # G열에 "합계" 텍스트
+        ws.cell(row=total_row, column=COL_PDF_AMT - 1).value = "합계"
+
+        first_cell = ws.cell(row=DATA_START_ROW, column=COL_PDF_AMT).coordinate
+        last_cell = ws.cell(row=last_data_row, column=COL_PDF_AMT).coordinate
+        ws.cell(row=total_row, column=COL_PDF_AMT).value = f"=SUM({first_cell}:{last_cell})"
+
     out = io.BytesIO()
     wb.save(out)
     out.seek(0)
