@@ -173,10 +173,17 @@ def fill_template_with_summary(template_bytes: bytes, summary: pd.DataFrame) -> 
         cell_h = ws.cell(row=current_row, column=COL_PDF_AMT)
         cell_h.value = "" if amount_pdf == 0 else amount_pdf
 
+
+        
+       codex/fix-layout-alignment-issue-j8zv8a
         # 계산 금액(L열) - '차이' 기준으로 표시 (계산액이 0이어도 차이가 있으면 표기)
         diff = int(row.get("차이", amount_calc - amount_pdf) or 0)
         cell_l = ws.cell(row=current_row, column=COL_CALC_AMT)
         if diff != 0:
+        # 계산 금액(L열) - PDF와 다를 때 표시 (계산액이 0이어도 차이가 있으면 표기)
+        cell_l = ws.cell(row=current_row, column=COL_CALC_AMT)
+        if amount_pdf != amount_calc:
+        main
             cell_l.value = amount_calc
             cell_h.font = red_bold_font
             cell_l.font = red_bold_font
